@@ -48,10 +48,39 @@ if __name__ == '__main__':
 
 
     # ------------------------ Laboratoire 1 - Question 1 - Début de la section à compléter ----------------------------
+    # # Chargement des datasets
+    # transform = transforms.Compose([transforms.ToTensor(),
+    #                                 transforms.Normalize((0.1307,), (0.3081,))])
 
+    # # Créez les instances de la classe torchvision.datasets.MNIST
+    # # L'ensemble d'entraînement original (60000 images)
+    # dataset = datasets.MNIST(root=data_path, train=True, download=True, transform=transform)
+    # # L'ensemble de test (10000 images)
+    # dataset_test = datasets.MNIST(root=data_path, train=False, download=True, transform=transform)
 
+    # Créez les instances de la classe torchvision.datasets.MNIST
+    # L'ensemble d'entraînement original (60000 images)
+    dataset = datasets.MNIST(root=data_path, train=True, download=True)
+    # L'ensemble de test (10000 images)
+    dataset_test = datasets.MNIST(root=data_path, train=False, download=True)
 
+    # Séparation du dataset (entraînement et validation)
+    n_train_samples = int(len(dataset) * train_val_split)
+    n_val_samples = len(dataset) - n_train_samples
 
+    # Séparez l’ensemble d’entraînement avec torch.utils.data.random_split
+    dataset_train, dataset_val = torch.utils.data.random_split(dataset, [n_train_samples, n_val_samples])
+
+    print('Number of training samples   : ', len(dataset_train))
+    print('Number of validation samples : ', len(dataset_val))
+    print('Number of test samples : ', len(dataset_test))
+    print('\n')
+
+    img , label = dataset_val[0]
+    # plt.imshow(img[0 ,: ,:].cpu().numpy(), cmap='gray')
+    plt.imshow(img, cmap='gray')
+    plt.title ( str ( label ))
+    plt.show()
     # ---------------------- Laboratoire 1 - Question 1 - Fin de la section à compléter --------------------------------
 
 
