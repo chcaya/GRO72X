@@ -21,7 +21,22 @@ def main():
 
 
 def create_network(checkpoint_path):
-    layers = []
+    layers = [
+        # Input layer: MNIST images are 28x28=784 pixels.
+        # Hidden layer 1 with 128 neurons, Batch Norm, and ReLU activation.
+        FullyConnectedLayer(input_count=784, output_count=128),
+        BatchNormalization(input_count=128, alpha=0.1),
+        ReLU(),
+
+        # Hidden layer 2 with 32 neurons, Batch Norm, and ReLU activation.
+        FullyConnectedLayer(input_count=128, output_count=32),
+        BatchNormalization(input_count=32, alpha=0.1),
+        ReLU(),
+
+        # Output layer: 10 neurons for the 10 digits (0-9).
+        # No activation function here, as CrossEntropyLoss expects raw logits.
+        FullyConnectedLayer(input_count=32, output_count=10)
+    ]
     network = Network(layers)
     if checkpoint_path is not None:
         network.load(checkpoint_path)

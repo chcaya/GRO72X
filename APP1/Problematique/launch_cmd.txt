@@ -2,4 +2,6 @@ conda activate GRO72X
 
 python3 -m unittest discover . "*_test.py"
 
-python3 train_mnist.py --learning_rate 0.01 --batch_size 128 --epoch_count 1 --output_path ./output
+python3 train_mnist.py --learning_rate 0.01 --batch_size 128 --epoch_count 30 --output_path ./output
+
+python infer_test.py --checkpoint_path output/checkpoint_epoch_30.pkl --image_index 12

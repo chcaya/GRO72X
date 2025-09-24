@@ -60,8 +60,6 @@ class MeanSquaredErrorLoss(Loss):
         :param target: The target tensor (shape: same as x)
         :return A tuple containing the loss and the gradient with respect to the input (loss, input_grad)
         """
-        num_samples = x.shape[0]
-        
         # 1. Calculate the error
         error = x - target
         
