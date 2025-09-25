@@ -16,8 +16,8 @@ if __name__ == '__main__':
     weights_path = os.path.join(dir_path, 'weights', 'mnist_best.pt')
 
     # ---------------- Paramètres et hyperparamètres ----------------#
-    train = False  # Entraînement?
-    test = False  # Tester avec le meilleur modèle?
+    train = True  # Entraînement?
+    test = True  # Tester avec le meilleur modèle?
     use_cpu = True  # Forcer a utiliser le cpu?
     save_model = True  # Sauvegarder le meilleur modèle ?
 
@@ -48,21 +48,21 @@ if __name__ == '__main__':
 
 
     # ------------------------ Laboratoire 1 - Question 1 - Début de la section à compléter ----------------------------
-    # # Chargement des datasets
-    # transform = transforms.Compose([transforms.ToTensor(),
-    #                                 transforms.Normalize((0.1307,), (0.3081,))])
-
-    # # Créez les instances de la classe torchvision.datasets.MNIST
-    # # L'ensemble d'entraînement original (60000 images)
-    # dataset = datasets.MNIST(root=data_path, train=True, download=True, transform=transform)
-    # # L'ensemble de test (10000 images)
-    # dataset_test = datasets.MNIST(root=data_path, train=False, download=True, transform=transform)
+    # Chargement des datasets
+    transform = transforms.Compose([transforms.ToTensor(),
+                                    transforms.Normalize((0.1307,), (0.3081,))])
 
     # Créez les instances de la classe torchvision.datasets.MNIST
     # L'ensemble d'entraînement original (60000 images)
-    dataset = datasets.MNIST(root=data_path, train=True, download=True)
+    dataset = datasets.MNIST(root=data_path, train=True, download=True, transform=transform)
     # L'ensemble de test (10000 images)
-    dataset_test = datasets.MNIST(root=data_path, train=False, download=True)
+    dataset_test = datasets.MNIST(root=data_path, train=False, download=True, transform=transform)
+
+    # # Créez les instances de la classe torchvision.datasets.MNIST
+    # # L'ensemble d'entraînement original (60000 images)
+    # dataset = datasets.MNIST(root=data_path, train=True, download=True)
+    # # L'ensemble de test (10000 images)
+    # dataset_test = datasets.MNIST(root=data_path, train=False, download=True)
 
     # Séparation du dataset (entraînement et validation)
     n_train_samples = int(len(dataset) * train_val_split)
@@ -78,9 +78,8 @@ if __name__ == '__main__':
 
     img , label = dataset_val[0]
     # plt.imshow(img[0 ,: ,:].cpu().numpy(), cmap='gray')
-    plt.imshow(img, cmap='gray')
-    plt.title ( str ( label ))
-    plt.show()
+    # plt.title ( str ( label ))
+    # plt.show()
     # ---------------------- Laboratoire 1 - Question 1 - Fin de la section à compléter --------------------------------
 
 
@@ -88,16 +87,39 @@ if __name__ == '__main__':
 
     # ------------------------ Laboratoire 1 - Question 2 - Début de la section à compléter ----------------------------
     # Creation des dataloaders
-    train_loader = [None]
-    val_loader = [None]
-    test_loader = [None]
+    train_loader = torch.utils.data.DataLoader(
+        dataset_train,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        dataset_val,
+        batch_size=val_test_batch_size,
+        shuffle=False, # Pas nécessaire de mélanger pour la validation/test
+        num_workers=num_workers
+    )
+
+    test_loader = torch.utils.data.DataLoader(
+        dataset_test,
+        batch_size=val_test_batch_size,
+        shuffle=False, # Pas nécessaire de mélanger pour la validation/test
+        num_workers=num_workers
+    )
+
+    img, label = next(iter(train_loader))
+    print ('image tensor shape: ', img.shape)
+    print ('label tensor shape: ', label.shape)
     # ---------------------- Laboratoire 1 - Question 2 - Fin de la section à compléter --------------------------------
 
 
     # ---------------------- Laboratoire 1 - Question 3 - Début de la section à compléter ------------------
     # Création de l'optimisateur et de la fonction de coût
-    optimizer = None
-    loss_criterion = None
+    # Pour un problème de classification multi-classes, la Cross-Entropy Loss est le choix standard.
+    loss_criterion = torch.nn.CrossEntropyLoss()
+    # L'optimiseur Adam est un choix robuste et populaire qui ajuste le taux d'apprentissage.
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # ---------------------- Laboratoire 1 - Question 3 - Fin de la section à compléter --------------------
 
 
@@ -118,7 +140,24 @@ if __name__ == '__main__':
 
 
                 # ---------------------- Laboratoire 1 - Question 3 - Début de la section à compléter ------------------
+                # 1. Mettre à zéro les gradients accumulés des itérations précédentes.
+                optimizer.zero_grad()
 
+                # 2. Passe avant (forward pass) : propager les données d'entrée dans le réseau.
+                output = model(data)
+
+                # 3. Calcul de la fonction de coût (loss) en comparant les prédictions (output) et les étiquettes (target).
+                loss = loss_criterion(output, target)
+
+                # 4. Rétropropagation (backward pass) : calculer le gradient de la fonction de coût par rapport à chaque poids du réseau.
+                loss.backward()
+
+                # 5. Mise à jour des poids : l'optimiseur ajuste les poids du réseau en utilisant les gradients calculés.
+                optimizer.step()
+
+                # Accumuler la valeur de la fonction de coût pour ce lot.
+                # .item() extrait la valeur scalaire du tenseur de coût.
+                running_loss += loss.item()
                 # ---------------------- Laboratoire 1 - Question 3 - Fin de la section à compléter --------------------
 
 
@@ -143,8 +182,20 @@ if __name__ == '__main__':
 
 
                     # ---------------------- Laboratoire 1 - Question 4 - Début de la section à compléter --------------
+                    # 1. Passe avant (forward pass) pour obtenir les prédictions du modèle.
+                    output = model(data)
 
-                # ---------------------- Laboratoire 1 - Question 4 - Fin de la section à compléter --------------------
+                    # 2. Accumuler le coût (loss) pour ce lot de validation.
+                    val_loss += loss_criterion(output, target).item()
+
+                    # 3. Obtenir la classe prédite en trouvant l'indice de la valeur maximale dans le tenseur de sortie.
+                    pred = torch.argmax(output, dim=1)
+
+                    # 4. Comparer les prédictions avec les vraies étiquettes et accumuler le nombre de prédictions correctes.
+                    accuracy += pred.eq(target).sum().item()
+
+            accuracy /= len(val_loader.dataset)
+            # ---------------------- Laboratoire 1 - Question 4 - Fin de la section à compléter --------------------
 
 
 
@@ -186,10 +237,20 @@ if __name__ == '__main__':
 
 
                 # ---------------------- Laboratoire 1 - Question 4 - Début de la section à compléter ------------------
+                # 1. Passe avant (forward pass).
+                output = model(data)
 
-                output = None
+                # 2. Accumuler le coût (loss) pour ce lot de test.
+                test_loss += loss_criterion(output, target).item()
 
-            # ---------------------- Laboratoire 1 - Question 4 - Fin de la section à compléter ------------------------
+                # 3. Obtenir la classe prédite.
+                pred = torch.argmax(output, dim=1)
+
+                # 4. Accumuler le nombre de prédictions correctes.
+                accuracy += pred.eq(target).sum().item()
+
+        accuracy /= len(test_loader.dataset)
+        # ---------------------- Laboratoire 1 - Question 4 - Fin de la section à compléter ------------------------
 
 
 
