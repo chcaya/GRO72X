@@ -190,8 +190,7 @@ class BatchNormalization(Layer):
 
         grad_var = np.sum(grad_x_normalized * (x - batch_mean) * (-1/2)*(batch_var + self.epsilon)**(-3/2), axis=0, keepdims=True)
 
-        grad_mean = -np.sum(grad_x_normalized / std_dev, axis=0, keepdims=True) + \
-                    grad_var * np.mean(-2.0 * (x - batch_mean), axis=0, keepdims=True) # TODO
+        grad_mean = -np.sum(grad_x_normalized, axis=0, keepdims=True) / std_dev
 
         grad_x = grad_x_normalized / std_dev + (2/m) * grad_var * (x - batch_mean) + (1/m) * grad_mean
     
