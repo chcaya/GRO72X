@@ -4,11 +4,16 @@ import os
 
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import transforms
 
 from dataset import ConveyorSimulator
 from metrics import AccuracyMetric, MeanAveragePrecisionMetric, SegmentationIntersectionOverUnionMetric
+from models.classification_network import ClassificationNetwork
+from models.detection_network import DetectionNetwork
+from models.segmentation_network import SegmentationNetwork
 from visualizer import Visualizer
 
 TRAIN_VALIDATION_SPLIT = 0.9
@@ -44,27 +49,65 @@ class ConveyorCnnTrainer():
 
     def _create_model(self, task):
         if task == 'classification':
-            # À compléter
-            raise NotImplementedError()
+            return ClassificationNetwork()
         elif task == 'detection':
-            # À compléter
-            raise NotImplementedError()
+            return DetectionNetwork()
         elif task == 'segmentation':
-            # À compléter
-            raise NotImplementedError()
+            return SegmentationNetwork(n_channels=1, n_classes=4)
         else:
             raise ValueError('Not supported task')
 
     def _create_criterion(self, task):
         if task == 'classification':
-            # À compléter
-            raise NotImplementedError()
+            return nn.BCEWithLogitsLoss()
         elif task == 'detection':
-            # À compléter
-            raise NotImplementedError()
+            def yolo_style_loss_fn(prediction, target):
+                # --- Hyperparameters from the YOLO paper ---
+                lambda_coord = 5.0
+                lambda_noObj = 0.5
+
+                # Create the objectness mask (1s for objects, 0s for background)
+                objectness_mask = target[:, :, 0] == 1
+                # Create the inverse mask for background
+                no_objectness_mask = target[:, :, 0] == 0
+
+                # --- 1. Confidence Loss (Split into two parts) ---
+
+                # Loss for grid cells that contain an object
+                loss_conf_obj = F.binary_cross_entropy_with_logits(
+                    prediction[:, :, 0][objectness_mask],
+                    target[:, :, 0][objectness_mask]
+                )
+
+                # Loss for grid cells that DO NOT contain an object
+                loss_conf_noObj = F.binary_cross_entropy_with_logits(
+                    prediction[:, :, 0][no_objectness_mask],
+                    target[:, :, 0][no_objectness_mask]
+                )
+
+                # --- 2. BBox Regression Loss ---
+                # This loss is only calculated for cells that contain an object
+                bbox_pred = prediction[:, :, 1:5][objectness_mask]
+                bbox_target = target[:, :, 1:5][objectness_mask]
+
+                loss_bbox = torch.tensor(0.0, device=prediction.device)
+                if bbox_pred.shape[0] > 0:
+                    # Note: Original YOLO uses sum of squared errors and sqrt(w), sqrt(h).
+                    # Using smooth_l1_loss is a common modern improvement.
+                    loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target)
+
+                # --- 3. Final Weighted Loss ---
+                total_loss = (
+                    loss_conf_obj +
+                    (lambda_noObj * loss_conf_noObj) +
+                    (lambda_coord * loss_bbox)
+                )
+
+                return total_loss
+
+            return yolo_style_loss_fn
         elif task == 'segmentation':
-            # À compléter
-            raise NotImplementedError()
+            return nn.CrossEntropyLoss()
         else:
             raise ValueError('Not supported task')
 
@@ -246,9 +289,41 @@ class ConveyorCnnTrainer():
                 Si un 0 est présent à (i, 2), aucune croix n'est présente dans l'image i.
         :return: La valeur de la fonction de coût pour le lot
         """
+        # Reset gradients
+        optimizer.zero_grad()
 
-        # À compléter
-        raise NotImplementedError()
+        # Forward pass: compute predicted output by passing inputs to the model
+        prediction = model(image)
+
+        # Calculate the loss and update the metric based on the task
+        if task == 'classification':
+            target = class_labels.float()
+            loss = criterion(prediction, target)
+            metric.accumulate(torch.sigmoid(prediction), target)
+
+        elif task == 'detection':
+            target = boxes
+            loss = criterion(prediction, target)
+            # The metric expects confidence scores as probabilities, so we apply sigmoid
+            pred_for_metric = prediction.detach().clone()
+            pred_for_metric[:, :, 0] = torch.sigmoid(pred_for_metric[:, :, 0])
+            metric.accumulate(pred_for_metric, target)
+
+        elif task == 'segmentation':
+            target = segmentation_target.long()
+            loss = criterion(prediction, target)
+            metric.accumulate(prediction, target)
+
+        else:
+            raise ValueError(f"Task '{task}' is not supported.")
+
+        # Backward pass: compute gradient of the loss with respect to model parameters
+        loss.backward()
+
+        # Calling the step function on an Optimizer makes an update to its parameters
+        optimizer.step()
+
+        return loss
 
     def _test_batch(self, task, model, criterion, metric, image, segmentation_target, boxes, class_labels):
         """
@@ -287,9 +362,32 @@ class ConveyorCnnTrainer():
                 Si un 0 est présent à (i, 2), aucune croix n'est présente dans l'image i.
         :return: La valeur de la fonction de coût pour le lot
         """
+        # Forward pass: compute predicted output by passing inputs to the model
+        prediction = model(image)
 
-        # À compléter
-        raise NotImplementedError()
+        # Calculate the loss and update the metric based on the task
+        if task == 'classification':
+            target = class_labels.float()
+            loss = criterion(prediction, target)
+            metric.accumulate(torch.sigmoid(prediction), target)
+
+        elif task == 'detection':
+            target = boxes
+            loss = criterion(prediction, target)
+            # The metric expects confidence scores as probabilities, so we apply sigmoid
+            pred_for_metric = prediction.detach().clone()
+            pred_for_metric[:, :, 0] = torch.sigmoid(pred_for_metric[:, :, 0])
+            metric.accumulate(pred_for_metric, target)
+
+        elif task == 'segmentation':
+            target = segmentation_target.long()
+            loss = criterion(prediction, target)
+            metric.accumulate(prediction, target)
+            
+        else:
+            raise ValueError(f"Task '{task}' is not supported.")
+
+        return loss
 
 
 if __name__ == '__main__':
