@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.models as models
 
 # Module du dataset
 from voc_classification_dataset import VOCClassificationDataset
@@ -23,7 +24,7 @@ input_channels = 3  # Nombre de canaux d'entree
 num_classes = 21  # Nombre de classes
 batch_size = 32  # Taille des lots pour l'entraînement
 val_test_batch_size = 32  # Taille des lots pour validation et test
-epochs = 10  # Nombre d'itérations (epochs)
+epochs = 1  # Nombre d'itérations (epochs)
 train_val_split = 0.8  # Proportion d'échantillons
 lr = 0.0001  # Taux d'apprentissage
 random_seed = 1  # Pour la répétabilité
@@ -73,6 +74,29 @@ if __name__ == '__main__':
 
     # ------------------------ Laboratoire 2 - Question 2 - Début de la section à compléter ----------------------------
     # Chargement du modèle
+
+    # 1. Charger le modèle ResNet18 pré-entraîné sur ImageNet
+    model = models.resnet18(pretrained=True)
+
+    # 2. Geler les poids de toutes les couches du réseau
+    # Les gradients ne seront pas calculés pour ces couches lors de l'entraînement
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # 3. Remplacer la dernière couche (le classifieur)
+    # Obtenir le nombre de fonctionnalités en entrée de la dernière couche
+    num_features = model.fc.in_features
+
+    # Créer une nouvelle couche linéaire qui sortira un vecteur de la taille du nombre de classes
+    # Par défaut, les nouvelles couches ont `requires_grad=True`, donc elles seront entraînées
+    model.fc = nn.Linear(num_features, num_classes)
+
+    # 4. Ajouter une fonction d'activation Sigmoid
+    # La fonction de coût BCELoss attend des probabilités entre 0 et 1 pour chaque classe
+    model = nn.Sequential(
+        model,
+        nn.Sigmoid()
+    )
 
     # ------------------------ Laboratoire 2 - Question 2 - Fin de la section à compléter ------------------------------
 
