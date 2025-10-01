@@ -49,6 +49,14 @@ class VOCClassificationDataset(VOCDetection):
 
         # ------------------------ Laboratoire 2 - Question 1 - Début de la section à compléter ------------------------
 
+        # Iterate through each object in the image's annotation metadata
+        for obj in target_metadata['annotation']['object']:
+            # Get the class name of the object
+            class_name = obj['name']
+            # Use the provided dictionary to get the corresponding class ID
+            class_id = self.VOC_CLASSES_2_ID[class_name]
+            # Set the element at the class ID's index to 1.0 in the multi-hot vector
+            multi_hot[class_id] = 1.0
 
         # ------------------------ Laboratoire 2 - Question 1 - Fin de la section à compléter --------------------------
 
