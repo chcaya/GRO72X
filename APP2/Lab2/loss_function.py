@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class LocalizationLoss(nn.Module):
@@ -9,8 +10,39 @@ class LocalizationLoss(nn.Module):
 
     def forward(self, output, target):
         # ------------------------ Laboratoire 2 - Question 4 - Début de la section à compléter ------------------------
-        # À compléter
-        return torch.tensor(0.0)
+        # 1. Séparer les prédictions (boîte et classes) et les cibles
+        pred_box = output[:, :4]
+        pred_cls = output[:, 4:]
+        
+        true_box_corners = target[:, :4]
+        true_cls_idx = target[:, 4]
+
+        # 2. Calculer la perte de classification (Classification Loss)
+        # On utilise la Cross-Entropy Loss pour la classification multi-classe.
+        # La cible de classe doit être de type Long.
+        cls_loss = F.cross_entropy(pred_cls, true_cls_idx.long(), reduction='none')
+
+        # 3. Calculer la perte de localisation (Bounding Box Loss)
+        # 3a. Convertir le format de la boîte cible de [xmin, ymin, xmax, ymax]
+        #     à [x_center, y_center, width, height] pour correspondre à la sortie du modèle.
+        true_w = true_box_corners[:, 2] - true_box_corners[:, 0]
+        true_h = true_box_corners[:, 3] - true_box_corners[:, 1]
+        true_x_center = true_box_corners[:, 0] + true_w / 2
+        true_y_center = true_box_corners[:, 1] + true_h / 2
+
+        # Regrouper les coordonnées converties dans un tenseur
+        true_box = torch.stack([true_x_center, true_y_center, true_w, true_h], dim=1)
+
+        # 3b. Calculer la perte MSE (Mean Squared Error) pour la régression de la boîte.
+        # On somme les erreurs au carré pour les 4 coordonnées de la boîte pour chaque élément du lot.
+        box_loss = torch.sum(F.mse_loss(pred_box, true_box, reduction='none'), dim=1)
+        
+        # 4. Combiner les pertes et les réduire à un scalaire
+        # La perte totale est la somme de la perte de localisation et de la perte de classification pondérée par alpha.
+        # On prend ensuite la moyenne sur tous les éléments du lot.
+        total_loss = torch.mean(box_loss + self._alpha * cls_loss)
+
+        return total_loss
         # ------------------------ Laboratoire 2 - Question 4 - Fin de la section à compléter --------------------------
 
 
