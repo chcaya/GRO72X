@@ -16,15 +16,18 @@ class ClassificationNetwork(nn.Module):
             nn.MaxPool2d(2, 2)  # 26 -> 13
         )
 
-        self.pooling_and_fc = nn.Sequential(
-            # This layer averages each of the 32 channels down to a 1x1 size
-            nn.AdaptiveAvgPool2d((1, 1)),
+        self.classifier_head = nn.Sequential(
+            # This layer takes the 13x13 feature map and resizes it to 4x4
+            nn.AdaptiveAvgPool2d((4, 4)),
             nn.Flatten(),
-            # The input to the linear layer is now just the number of channels (32)
-            nn.Linear(32, 3) 
+            # The input is now much smaller: 32 channels * 4 * 4 features
+            nn.Linear(32 * 4 * 4, 128),
+            nn.ReLU(),
+            nn.Dropout(p=0.5),
+            nn.Linear(128, 3)
         )
 
     def forward(self, x):
         x = self.conv_layers(x)
-        x = self.pooling_and_fc(x)
+        x = self.classifier_head(x)
         return x

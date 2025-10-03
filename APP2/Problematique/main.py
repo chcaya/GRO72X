@@ -1,12 +1,15 @@
 #! usr/bin/python3
 import argparse
+import random
 import os
 
+import albumentations as A
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from albumentations.pytorch import ToTensorV2
 from torchvision import transforms
 
 from dataset import ConveyorSimulator
@@ -31,7 +34,22 @@ class ConveyorCnnTrainer():
         self._device = torch.device('cuda' if use_cuda else 'cpu')
         seed = np.random.rand()
         torch.manual_seed(seed)
-        self.transform = transforms.Compose([transforms.ToTensor()])
+        # self.transform = transforms.Compose([transforms.ToTensor()])
+        # Augmentations for the TRAINING set ONLY
+        self.train_transform = A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.Rotate(limit=15, p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, p=0.5),
+            A.Normalize(mean=[0.5], std=[0.5]),
+            
+            # This must always be the last step in the pipeline
+            ToTensorV2()
+        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_ids']))
+
+        self.test_transform = A.Compose([
+            A.Normalize(mean=[0.5], std=[0.5]),
+            ToTensorV2(),
+        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_ids']))
 
         # Generation des 'path'
         self._dir_path = os.path.dirname(__file__)
@@ -61,51 +79,56 @@ class ConveyorCnnTrainer():
         if task == 'classification':
             return nn.BCEWithLogitsLoss()
         elif task == 'detection':
-            def yolo_style_loss_fn(prediction, target):
-                # --- Hyperparameters from the YOLO paper ---
+            def detection_loss(prediction, target):
+                """
+                A standard object detection loss function that combines confidence, bounding
+                box, and classification losses.
+
+                :param prediction: The (N, 3, 7) output from the model.
+                                   Format: [conf, x, y, size, score_c0, score_c1, score_c2]
+                :param target: The (N, 3, 5) ground truth tensor.
+                               Format: [objectness, x, y, size, class_index]
+                """
+                # --- Hyperparameters for balancing the loss components ---
                 lambda_coord = 5.0
-                lambda_noObj = 0.5
+                lambda_noobj = 0.5
+                
+                # --- Create a mask to find which prediction slots contain an object ---
+                obj_mask = target[..., 0] == 1
+                noobj_mask = target[..., 0] == 0
 
-                # Create the objectness mask (1s for objects, 0s for background)
-                objectness_mask = target[:, :, 0] == 1
-                # Create the inverse mask for background
-                no_objectness_mask = target[:, :, 0] == 0
-
-                # --- 1. Confidence Loss (Split into two parts) ---
-
-                # Loss for grid cells that contain an object
+                # --- 1. Confidence (Objectness) Loss ---
                 loss_conf_obj = F.binary_cross_entropy_with_logits(
-                    prediction[:, :, 0][objectness_mask],
-                    target[:, :, 0][objectness_mask]
+                    prediction[..., 0][obj_mask],
+                    target[..., 0][obj_mask]
                 )
-
-                # Loss for grid cells that DO NOT contain an object
-                loss_conf_noObj = F.binary_cross_entropy_with_logits(
-                    prediction[:, :, 0][no_objectness_mask],
-                    target[:, :, 0][no_objectness_mask]
+                loss_conf_noobj = F.binary_cross_entropy_with_logits(
+                    prediction[..., 0][noobj_mask],
+                    target[..., 0][noobj_mask]
                 )
-
-                # --- 2. BBox Regression Loss ---
-                # This loss is only calculated for cells that contain an object
-                bbox_pred = prediction[:, :, 1:5][objectness_mask]
-                bbox_target = target[:, :, 1:5][objectness_mask]
-
+                loss_confidence = loss_conf_obj + (lambda_noobj * loss_conf_noobj)
+                
+                # --- 2. Bounding Box Loss (Localization) ---
                 loss_bbox = torch.tensor(0.0, device=prediction.device)
-                if bbox_pred.shape[0] > 0:
-                    # Note: Original YOLO uses sum of squared errors and sqrt(w), sqrt(h).
-                    # Using smooth_l1_loss is a common modern improvement.
-                    loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target)
+                if obj_mask.sum() > 0:
+                    bbox_pred = prediction[..., 1:4][obj_mask]
+                    bbox_target = target[..., 1:4][obj_mask]
+                    loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target, reduction='mean')
+                    
+                # --- 3. Classification Loss ---
+                loss_class = torch.tensor(0.0, device=prediction.device)
+                if obj_mask.sum() > 0:
+                    class_pred_logits = prediction[..., 4:][obj_mask]
+                    target_class_indices = target[..., 4][obj_mask].long()
+                    loss_class = F.cross_entropy(class_pred_logits, target_class_indices, reduction='mean')
 
-                # --- 3. Final Weighted Loss ---
-                total_loss = (
-                    loss_conf_obj +
-                    (lambda_noObj * loss_conf_noObj) +
-                    (lambda_coord * loss_bbox)
-                )
-
+                # --- Final Combined Loss ---
+                print(f"BBox Loss: {(lambda_coord * loss_bbox).item():.4f}, Conf Loss: {loss_confidence.item():.4f}, Class Loss: {loss_class.item():.4f}")
+                total_loss = loss_confidence + (lambda_coord * loss_bbox) + loss_class
+                
                 return total_loss
 
-            return yolo_style_loss_fn
+            return detection_loss
         elif task == 'segmentation':
             return nn.CrossEntropyLoss()
         else:
@@ -124,7 +147,7 @@ class ConveyorCnnTrainer():
     def test(self):
         params_test = {'batch_size': self._args.batch_size, 'shuffle': False, 'num_workers': 4}
 
-        dataset_test = ConveyorSimulator(self._test_data_path, self.transform)
+        dataset_test = ConveyorSimulator(self._test_data_path, self.test_transform)
         test_loader = torch.utils.data.DataLoader(dataset_test, **params_test)
 
         test_metric = self._create_metric(self._args.task)
@@ -152,7 +175,20 @@ class ConveyorCnnTrainer():
             test_loss, test_metric.get_name(), test_metric.get_value()))
 
         prediction = self._model(image)
-        visualizer.show_prediction(image[0], prediction[0], segmentation_target[0], boxes[0], class_labels[0])
+
+        # Get the number of images in the current batch
+        batch_size = image.shape[0]
+        # Pick a random index from 0 to (batch_size - 1)
+        random_idx = random.randint(0, batch_size - 1)
+
+        # Show the prediction for the randomly selected image
+        visualizer.show_prediction(
+            image[random_idx], 
+            prediction[random_idx], 
+            segmentation_target[random_idx], 
+            boxes[random_idx], 
+            class_labels[random_idx]
+        )
 
     def train(self):
         epochs_train_losses = []
@@ -165,7 +201,7 @@ class ConveyorCnnTrainer():
         params_train = {'batch_size': self._args.batch_size, 'shuffle': True, 'num_workers': 4}
         params_validation = {'batch_size': self._args.batch_size, 'shuffle': False, 'num_workers': 4}
 
-        dataset_trainval = ConveyorSimulator(self._train_data_path, self.transform)
+        dataset_trainval = ConveyorSimulator(self._train_data_path, self.train_transform)
         dataset_train, dataset_validation = torch.utils.data.random_split(dataset_trainval,
                                                                           [int(len(
                                                                               dataset_trainval) * TRAIN_VALIDATION_SPLIT),
@@ -242,7 +278,20 @@ class ConveyorCnnTrainer():
                 validation_loss, validation_metric.get_name(), validation_metric_value))
 
             prediction = self._model(image)
-            visualizer.show_prediction(image[0], prediction[0], masks[0], boxes[0], labels[0])
+
+            # Get the number of images in the current batch
+            batch_size = image.shape[0]
+            # Pick a random index from 0 to (batch_size - 1)
+            random_idx = random.randint(0, batch_size - 1)
+
+            # Show the prediction for the randomly selected image
+            visualizer.show_prediction(
+                image[random_idx], 
+                prediction[random_idx], 
+                masks[random_idx], 
+                boxes[random_idx], 
+                labels[random_idx]
+            )
             visualizer.show_learning_curves(epochs_train_losses, epochs_validation_losses,
                                             epochs_train_metrics, epochs_validation_metrics,
                                             train_metric.get_name())
@@ -316,7 +365,7 @@ class ConveyorCnnTrainer():
 
         else:
             raise ValueError(f"Task '{task}' is not supported.")
-
+        
         # Backward pass: compute gradient of the loss with respect to model parameters
         loss.backward()
 
@@ -374,10 +423,9 @@ class ConveyorCnnTrainer():
         elif task == 'detection':
             target = boxes
             loss = criterion(prediction, target)
-            # The metric expects confidence scores as probabilities, so we apply sigmoid
             pred_for_metric = prediction.detach().clone()
             pred_for_metric[:, :, 0] = torch.sigmoid(pred_for_metric[:, :, 0])
-            metric.accumulate(pred_for_metric, target)
+            metric.accumulate(pred_for_metric, boxes)
 
         elif task == 'segmentation':
             target = segmentation_target.long()

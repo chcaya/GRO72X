@@ -1,5 +1,5 @@
-python3 main.py --mode train --task classification --epochs 25 --lr 0.0005 --early_stop 5
-python3 main.py --mode train --task detection --epochs 80 --lr 0.0005 --early_stop 5
+python3 main.py --mode train --task classification --epochs 200 --lr 0.0005 --early_stop 5
+python3 main.py --mode train --task detection --epochs 200 --lr 0.0005 --early_stop 5
 python3 main.py --mode train --task segmentation --epochs 80 --lr 0.0005 --early_stop 5
 
 python3 main.py --mode test --task classification --batch_size 64
