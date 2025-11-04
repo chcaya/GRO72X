@@ -19,10 +19,10 @@ if __name__ =="__main__":
 
     # ---------------- Paramètres et hyperparamètres ----------------#
     force_cpu = True            # Forcer l'utilisation du CPU (si un GPU est disponible)
-    training = True             # Faire l'entrainement sur l'ensemble de donnees
+    training = False             # Faire l'entrainement sur l'ensemble de donnees
     learning_curves = True      # Visualiser les courbes d'apprentissage pendant l'entrainement
     test_tagging = False         # Visualiser l'annotation sur des echantillons de validation
-    test_generation = False     # Visualiser la generation sur des echantillons de validation
+    test_generation = True     # Visualiser la generation sur des echantillons de validation
 
     batch_size = 10             # Taille des lots
     n_epochs = 50               # Nombre d'iteration sur l'ensemble de donnees

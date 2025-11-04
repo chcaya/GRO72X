@@ -18,7 +18,7 @@ class Model(nn.Module):
         # input_size = 1 (une seule dimension par pas de temps)
         # hidden_size = n_hidden (nombre de neurones dans l'état caché)
         # batch_first = True (le tenseur d'entrée aura la forme [lot, séquence, features])
-        self.rnn = nn.RNN(
+        self.rnn = nn.LSTM(
             input_size=1, 
             hidden_size=n_hidden, 
             num_layers=n_layers, 
@@ -41,8 +41,12 @@ class Model(nn.Module):
             batch_size = x.size(0)
             
             # Initialisation de h_0 : (nombre_de_couches, taille_du_lot, taille_cachée)
-            # .to(x.device) s'assure que le tenseur 'h' est sur le même appareil (CPU ou GPU) que 'x'.
-            h = torch.zeros(self.n_layers, batch_size, self.n_hidden).to(x.device)
+            h_0 = torch.zeros(self.n_layers, batch_size, self.n_hidden).to(x.device)
+            # Initialisation de c_0 (cell state)
+            c_0 = torch.zeros(self.n_layers, batch_size, self.n_hidden).to(x.device)
+            
+            # h est maintenant un tuple
+            h = (h_0, c_0)
 
         # 2. Passe avant dans le RNN
         # rnn_out: sortie de la couche récurrente pour chaque pas de temps (batch_size, seq_len, hidden_size)
