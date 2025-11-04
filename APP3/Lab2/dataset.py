@@ -39,7 +39,7 @@ class Fr_En(Dataset):
 
             # Francais
             line = fr.lower()
-            line = re.split('(\W)', line)
+            line = re.split(r'(\W)', line)
             line = list(filter(lambda x: x not in symb_to_remove, line))
             if len(line) < samplelen[0] or len(line) > samplelen[1]:
                 continue
@@ -51,7 +51,7 @@ class Fr_En(Dataset):
 
             # Anglais
             line = en.lower()
-            line = re.split('(\W)', line)
+            line = re.split(r'(\W)', line)
             line = list(filter(lambda x: x not in symb_to_remove, line))
             for symb in line:
                 if symb not in self.symb2int['en']:
@@ -72,9 +72,38 @@ class Fr_En(Dataset):
         
 
         # ---------------------- Laboratoire 2 - Question 2 - Début de la section à compléter ------------------
-        self.max_len['fr'] = 0
-        self.max_len['en'] = 0
 
+        # 1. Trouver la longueur maximale pour chaque langue
+        # (en comptant le futur jeton <eos>)
+        max_fr_len = 0
+        for i in range(len(data['fr'])):
+            if len(data['fr'][i]) > max_fr_len:
+                max_fr_len = len(data['fr'][i])
+        self.max_len['fr'] = max_fr_len + 1 # +1 pour <eos>
+
+        max_en_len = 0
+        for i in range(len(data['en'])):
+            if len(data['en'][i]) > max_en_len:
+                max_en_len = len(data['en'][i])
+        self.max_len['en'] = max_en_len + 1 # +1 pour <eos>
+
+        # 2. Appliquer le padding (remplissage) à toutes les séquences
+        for i in range(len(data['fr'])):
+            # Séquence française
+            fr_seq = data['fr'][i]
+            fr_seq.append(self.stop_symbol) # Ajout de <eos>
+            # Calculer le nombre de <pad> à ajouter
+            n_pad_fr = self.max_len['fr'] - len(fr_seq)
+            # Ajouter le padding
+            fr_seq.extend([self.pad_symbol] * n_pad_fr)
+
+            # Séquence anglaise
+            en_seq = data['en'][i]
+            en_seq.append(self.stop_symbol) # Ajout de <eos>
+            # Calculer le nombre de <pad> à ajouter
+            n_pad_en = self.max_len['en'] - len(en_seq)
+            # Ajouter le padding
+            en_seq.extend([self.pad_symbol] * n_pad_en)
 
         # ---------------------- Laboratoire 2 - Question 2 - Fin de la section à compléter ------------------
 
