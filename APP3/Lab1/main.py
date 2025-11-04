@@ -87,11 +87,33 @@ if __name__ =="__main__":
             # Entraînement
             running_loss_train = 0
             model.train()
+            h = None
             for batch_idx, data in enumerate(dataload_train):
                 in_seq, target_seq = [obj.to(device).float() for obj in data]
 
                 # ---------------------- Laboratoire 1 - Question 3 - Début de la section à compléter ------------------
 
+                # Reshape from (batch_size, seq_len) to (batch_size, seq_len, 1)
+                in_seq = in_seq.unsqueeze(-1)
+                target_seq = target_seq.unsqueeze(-1)
+
+                # 1. Remettre les gradients à zéro
+                optimizer.zero_grad()
+                
+                # 2. Passe avant (forward pass)
+                output, _ = model(in_seq)
+                
+                # 3. Calcul de la fonction de coût
+                loss = criterion(output, target_seq)
+                
+                # 4. Rétropropagation (backward pass)
+                loss.backward()
+                
+                # 5. Mise à jour des poids
+                optimizer.step()
+                
+                # 6. Mettre à jour le coût d'entraînement
+                running_loss_train += loss.item()
                 
                 # ---------------------- Laboratoire 1 - Question 3 - Fin de la section à compléter ------------------
             
@@ -104,11 +126,26 @@ if __name__ =="__main__":
             # Validation
             running_loss_val = 0
             model.eval()
+            h = None
             for data in dataload_val:
                 in_seq, target_seq = [obj.to(device).float() for obj in data]
 
                 # ---------------------- Laboratoire 1 - Question 3 - Début de la section à compléter ------------------
-                
+
+                # La validation n'a pas besoin de rétropropagation
+                with torch.no_grad():
+                    # Reshape from (batch_size, seq_len) to (batch_size, seq_len, 1)
+                    in_seq = in_seq.unsqueeze(-1)
+                    target_seq = target_seq.unsqueeze(-1)
+
+                    # 1. Passe avant (forward pass)
+                    output, _ = model(in_seq)
+                    
+                    # 2. Calcul de la fonction de coût
+                    loss = criterion(output, target_seq)
+                    
+                    # 3. Mettre à jour le coût de validation
+                    running_loss_val += loss.item()               
 
                 # ---------------------- Laboratoire 1 - Question 3 - Fin de la section à compléter ------------------
 
@@ -139,7 +176,7 @@ if __name__ =="__main__":
 
     if test_tagging:
         # Évaluation étiquettage
-        model = torch.load('model.pt', map_location=lambda storage, loc: storage)
+        model = torch.load('model.pt', map_location=lambda storage, loc: storage, weights_only=False)
         model = model.to(device)
         model.eval()
         for num in range(10):
@@ -152,7 +189,26 @@ if __name__ =="__main__":
 
             # ---------------------- Laboratoire 1 - Question 4 - Début de la section à compléter ------------------
             
-            
+            # Nous n'avons pas besoin de calculer les gradients lors de l'évaluation
+            with torch.no_grad():
+                # 1. Préparer le tenseur d'entrée :
+                #    - Mettre sur le bon appareil (device)
+                #    - Assurer le type float
+                #    - Ajouter la dimension du lot (batch_size=1) et la dimension des features (input_size=1)
+                #    Forme de input_sequence : (seq_len)
+                #    Forme désirée : (batch_size=1, seq_len, features=1)
+                in_tensor = input_sequence.to(device).float().view(1, -1, 1)
+
+                # 2. Effectuer la passe avant (forward pass)
+                # Le modèle renvoie (output, hidden_state)
+                prediction_tensor, _ = model(in_tensor)
+                
+                # 3. Traiter la sortie pour la visualisation
+                # Forme de sortie : (batch_size=1, seq_len, 1)
+                # .squeeze() -> supprime les dimensions de taille 1, résultant en (seq_len)
+                # .cpu() -> déplace le tenseur vers le CPU (requis avant .numpy())
+                # .numpy() -> convertit en array numpy
+                prediction_sequence = prediction_tensor.squeeze().cpu().numpy()   
 
             # ---------------------- Laboratoire 1 - Question 4 - Fin de la section à compléter ------------------
 
@@ -164,7 +220,7 @@ if __name__ =="__main__":
 
     if test_generation:
         # Évaluation génération
-        model = torch.load('model.pt', map_location=lambda storage, loc: storage)
+        model = torch.load('model.pt', map_location=lambda storage, loc: storage, weights_only=False)
         model = model.to(device)
         model.eval()
         for num in range(10):
@@ -181,7 +237,33 @@ if __name__ =="__main__":
 
             # ---------------------- Laboratoire 1 - Question 5 - Début de la section à compléter ------------------
         
+            # Nous n'avons pas besoin de calculer les gradients
+            with torch.no_grad():
+                # 1. "Amorcer" le modèle : évaluer la première moitié de la séquence
+                #    pour obtenir l'état caché initial (le "contexte")
+                prime_seq = input_sequence[:usable_input_sequence_len]
+                prime_tensor = prime_seq.to(device).float().view(1, -1, 1) # Forme : (1, seq_len, 1)
+                
+                # output_prime a la forme (1, seq_len, 1)
+                # h a la forme (num_layers, 1, n_hidden)
+                output_prime, h = model(prime_tensor)
+                
+                # 2. Prendre la TOUTE DERNIÈRE prédiction de la séquence d'amorce
+                #    Elle servira d'entrée pour la première étape de génération
+                #    Forme : (1, 1, 1)
+                current_input = output_prime[:, -1, :].view(1, 1, 1)
 
+                # 3. Boucle de génération itérative
+                for i in range(nb_predictions_to_generate):
+                    # 3a. Prédire un pas de temps en utilisant l'entrée et l'état caché précédents
+                    output_tensor, h = model(current_input, h)
+                    
+                    # 3b. Stocker la prédiction
+                    # .squeeze() transforme (1, 1, 1) en un scalaire
+                    prediction_sequence[i] = output_tensor.squeeze().cpu().numpy()
+                    
+                    # 3c. La sortie actuelle devient l'entrée de la prochaine itération
+                    current_input = output_tensor
 
             # ---------------------- Laboratoire 1 - Question 5 - Fin de la section à compléter ------------------
 

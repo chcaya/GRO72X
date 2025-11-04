@@ -16,7 +16,7 @@ class SignauxDataset(Dataset):
 
         # ------------------------ Laboratoire 1 - Question 1 - Début de la section à compléter ----------------------------
         
-        return 0
+        return len(self.data)
 
         # ---------------------- Laboratoire 1 - Question 1 - Fin de la section à compléter --------------------------------
 
@@ -24,7 +24,19 @@ class SignauxDataset(Dataset):
 
         # ------------------------ Laboratoire 1 - Question 1 - Début de la section à compléter ----------------------------
         
-        return 0
+        # 1. Récupérer l'échantillon (qui est un tuple) à l'index donné
+        sample = self.data[idx]
+        
+        # 2. Séparer l'entrée et la cible
+        input_sequence = sample[0]
+        target_sequence = sample[1]
+
+        # 3. Convertir les séquences en tenseurs Pytorch de type float
+        # (requis pour les données continues)
+        input_tensor = torch.tensor(input_sequence, dtype=torch.float32)
+        target_tensor = torch.tensor(target_sequence, dtype=torch.float32)
+        
+        return input_tensor, target_tensor
 
         # ---------------------- Laboratoire 1 - Question 1 - Fin de la section à compléter --------------------------------
     
