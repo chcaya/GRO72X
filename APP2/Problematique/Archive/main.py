@@ -3,11 +3,13 @@ import argparse
 import random
 import os
 
+import albumentations as A
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from albumentations.pytorch import ToTensorV2
 from torchvision import transforms
 
 from dataset import ConveyorSimulator
@@ -32,7 +34,22 @@ class ConveyorCnnTrainer():
         self._device = torch.device('cuda' if use_cuda else 'cpu')
         seed = np.random.rand()
         torch.manual_seed(seed)
-        self.transform = transforms.Compose([transforms.ToTensor()])
+        # self.transform = transforms.Compose([transforms.ToTensor()])
+        # Augmentations for the TRAINING set ONLY
+        self.train_transform = A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.Rotate(limit=15, p=0.5),
+            A.ColorJitter(brightness=0.2, contrast=0.2, p=0.5),
+            A.Normalize(mean=[0.5], std=[0.5]),
+            
+            # This must always be the last step in the pipeline
+            ToTensorV2()
+        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_ids']))
+
+        self.test_transform = A.Compose([
+            A.Normalize(mean=[0.5], std=[0.5]),
+            ToTensorV2(),
+        ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_ids']))
 
         # Generation des 'path'
         self._dir_path = os.path.dirname(__file__)
@@ -130,7 +147,7 @@ class ConveyorCnnTrainer():
     def test(self):
         params_test = {'batch_size': self._args.batch_size, 'shuffle': False, 'num_workers': 4}
 
-        dataset_test = ConveyorSimulator(self._test_data_path, self.transform)
+        dataset_test = ConveyorSimulator(self._test_data_path, self.test_transform)
         test_loader = torch.utils.data.DataLoader(dataset_test, **params_test)
 
         test_metric = self._create_metric(self._args.task)
@@ -184,7 +201,7 @@ class ConveyorCnnTrainer():
         params_train = {'batch_size': self._args.batch_size, 'shuffle': True, 'num_workers': 4}
         params_validation = {'batch_size': self._args.batch_size, 'shuffle': False, 'num_workers': 4}
 
-        dataset_trainval = ConveyorSimulator(self._train_data_path, self.transform)
+        dataset_trainval = ConveyorSimulator(self._train_data_path, self.train_transform)
         dataset_train, dataset_validation = torch.utils.data.random_split(dataset_trainval,
                                                                           [int(len(
                                                                               dataset_trainval) * TRAIN_VALIDATION_SPLIT),
@@ -275,7 +292,6 @@ class ConveyorCnnTrainer():
                 boxes[random_idx], 
                 labels[random_idx]
             )
-            
             visualizer.show_learning_curves(epochs_train_losses, epochs_validation_losses,
                                             epochs_train_metrics, epochs_validation_metrics,
                                             train_metric.get_name())
@@ -322,7 +338,6 @@ class ConveyorCnnTrainer():
                 Si un 0 est présent à (i, 2), aucune croix n'est présente dans l'image i.
         :return: La valeur de la fonction de coût pour le lot
         """
-
         # Reset gradients
         optimizer.zero_grad()
 
@@ -396,7 +411,6 @@ class ConveyorCnnTrainer():
                 Si un 0 est présent à (i, 2), aucune croix n'est présente dans l'image i.
         :return: La valeur de la fonction de coût pour le lot
         """
-
         # Forward pass: compute predicted output by passing inputs to the model
         prediction = model(image)
 

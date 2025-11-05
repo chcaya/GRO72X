@@ -9,7 +9,7 @@
     Navigate to the root of this project in your terminal and run the following command to create the Conda environment and install all necessary dependencies from the `env.yml` file.
 
     ```bash
-    conda env create -f env.yml
+    conda env create -f env.yml -n GRO72X
     ```
 
 3.  **Activate the Environment**
