@@ -43,8 +43,6 @@ class HandwrittenWords(Dataset):
         # Note : stroke_array.shape[1] est la longueur de la séquence (L)
         self.max_len_in = max(stroke_array.shape[1] for _, stroke_array in self.data)
         self.max_len_target = max(len(word) for word, _ in self.data) + 1 # +1 pour <eos>
-        print(f'self.max_len_in: {self.max_len_in}')
-        print(f'self.max_len_target: {self.max_len_target}')
         
         # 5. Déterminer la dimension des features d'entrée (nous prenons X et Y, donc 2)
         stroke_feature_dim = self.data[0][1].shape[0]
