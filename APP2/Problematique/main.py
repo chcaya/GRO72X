@@ -13,7 +13,7 @@ from torchvision import transforms
 from dataset import ConveyorSimulator
 from metrics import AccuracyMetric, MeanAveragePrecisionMetric, SegmentationIntersectionOverUnionMetric
 from models.classification_network import ClassificationNetwork
-from models.detection_network import DetectionNetwork
+from models.detection_network import DetectionNetwork, SimpleDetLoss
 from models.segmentation_network import SegmentationNetwork
 from visualizer import Visualizer
 
@@ -62,56 +62,58 @@ class ConveyorCnnTrainer():
         if task == 'classification':
             return nn.BCEWithLogitsLoss()
         elif task == 'detection':
-            def detection_loss(prediction, target):
-                """
-                A standard object detection loss function that combines confidence, bounding
-                box, and classification losses.
+            # def detection_loss(prediction, target):
+            #     """
+            #     A standard object detection loss function that combines confidence, bounding
+            #     box, and classification losses.
 
-                :param prediction: The (N, 3, 7) output from the model.
-                                   Format: [conf, x, y, size, score_c0, score_c1, score_c2]
-                :param target: The (N, 3, 5) ground truth tensor.
-                               Format: [objectness, x, y, size, class_index]
-                """
-                # --- Hyperparameters for balancing the loss components ---
-                lambda_coord = 5.0
-                lambda_noobj = 0.5
+            #     :param prediction: The (N, 3, 7) output from the model.
+            #                        Format: [conf, x, y, size, score_c0, score_c1, score_c2]
+            #     :param target: The (N, 3, 5) ground truth tensor.
+            #                    Format: [objectness, x, y, size, class_index]
+            #     """
+            #     # --- Hyperparameters for balancing the loss components ---
+            #     lambda_coord = 5.0
+            #     lambda_noobj = 0.5
                 
-                # --- Create a mask to find which prediction slots contain an object ---
-                obj_mask = target[..., 0] == 1
-                noobj_mask = target[..., 0] == 0
+            #     # --- Create a mask to find which prediction slots contain an object ---
+            #     obj_mask = target[..., 0] == 1
+            #     noobj_mask = target[..., 0] == 0
 
-                # --- 1. Confidence (Objectness) Loss ---
-                loss_conf_obj = F.binary_cross_entropy_with_logits(
-                    prediction[..., 0][obj_mask],
-                    target[..., 0][obj_mask]
-                )
-                loss_conf_noobj = F.binary_cross_entropy_with_logits(
-                    prediction[..., 0][noobj_mask],
-                    target[..., 0][noobj_mask]
-                )
-                loss_confidence = loss_conf_obj + (lambda_noobj * loss_conf_noobj)
+            #     # --- 1. Confidence (Objectness) Loss ---
+            #     loss_conf_obj = F.binary_cross_entropy_with_logits(
+            #         prediction[..., 0][obj_mask],
+            #         target[..., 0][obj_mask]
+            #     )
+            #     loss_conf_noobj = F.binary_cross_entropy_with_logits(
+            #         prediction[..., 0][noobj_mask],
+            #         target[..., 0][noobj_mask]
+            #     )
+            #     loss_confidence = loss_conf_obj + (lambda_noobj * loss_conf_noobj)
                 
-                # --- 2. Bounding Box Loss (Localization) ---
-                loss_bbox = torch.tensor(0.0, device=prediction.device)
-                if obj_mask.sum() > 0:
-                    bbox_pred = prediction[..., 1:4][obj_mask]
-                    bbox_target = target[..., 1:4][obj_mask]
-                    loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target, reduction='mean')
+            #     # --- 2. Bounding Box Loss (Localization) ---
+            #     loss_bbox = torch.tensor(0.0, device=prediction.device)
+            #     if obj_mask.sum() > 0:
+            #         bbox_pred = prediction[..., 1:4][obj_mask]
+            #         bbox_target = target[..., 1:4][obj_mask]
+            #         loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target, reduction='mean')
                     
-                # --- 3. Classification Loss ---
-                loss_class = torch.tensor(0.0, device=prediction.device)
-                if obj_mask.sum() > 0:
-                    class_pred_logits = prediction[..., 4:][obj_mask]
-                    target_class_indices = target[..., 4][obj_mask].long()
-                    loss_class = F.cross_entropy(class_pred_logits, target_class_indices, reduction='mean')
+            #     # --- 3. Classification Loss ---
+            #     loss_class = torch.tensor(0.0, device=prediction.device)
+            #     if obj_mask.sum() > 0:
+            #         class_pred_logits = prediction[..., 4:][obj_mask]
+            #         target_class_indices = target[..., 4][obj_mask].long()
+            #         loss_class = F.cross_entropy(class_pred_logits, target_class_indices, reduction='mean')
 
-                # --- Final Combined Loss ---
-                print(f"BBox Loss: {(lambda_coord * loss_bbox).item():.4f}, Conf Loss: {loss_confidence.item():.4f}, Class Loss: {loss_class.item():.4f}")
-                total_loss = loss_confidence + (lambda_coord * loss_bbox) + loss_class
+            #     # --- Final Combined Loss ---
+            #     print(f"BBox Loss: {(lambda_coord * loss_bbox).item():.4f}, Conf Loss: {loss_confidence.item():.4f}, Class Loss: {loss_class.item():.4f}")
+            #     total_loss = loss_confidence + (lambda_coord * loss_bbox) + loss_class
                 
-                return total_loss
+            #     return total_loss
 
-            return detection_loss
+            # return detection_loss
+
+            return SimpleDetLoss()
         elif task == 'segmentation':
             return nn.CrossEntropyLoss()
         else:
