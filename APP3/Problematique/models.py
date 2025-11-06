@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class trajectory2seq(nn.Module):
-    def __init__(self, hidden_dim, n_layers, int2symb, symb2int, dict_size, device, maxlen):
+    def __init__(self, hidden_dim, n_layers, int2symb, symb2int, dict_size, device, max_len):
         super(trajectory2seq, self).__init__()
         # Definition des parametres
         self.hidden_dim = hidden_dim
@@ -18,24 +18,18 @@ class trajectory2seq(nn.Module):
         self.symb2int = symb2int
         self.int2symb = int2symb
         self.dict_size = dict_size
-        self.maxlen = maxlen
+        self.max_len = max_len
 
         self.input_dim = 2
 
-        # Definition des couches
-        # Couches pour rnn
-        # Encodeur : Un GRU qui lit la séquence de trajectoire
-        # input_size=2 car nous lisons des données (x, y)
+        # Définition des couches du rnn
+        self.embedding = nn.Embedding(dict_size, hidden_dim)
         self.encoder_rnn = nn.GRU(
             input_size=self.input_dim, 
             hidden_size=hidden_dim, 
             num_layers=n_layers, 
             batch_first=True
         )
-
-        # Décodeur : Un GRU qui génère la séquence de caractères
-        # L'entrée du décodeur est la concaténation de l'embedding du mot précédent (hidden_dim)
-        # et du vecteur de contexte de l'attention (hidden_dim)
         self.decoder_rnn = nn.GRU(
             input_size=hidden_dim * 2, 
             hidden_size=hidden_dim, 
@@ -43,89 +37,102 @@ class trajectory2seq(nn.Module):
             batch_first=True
         )
 
-        # Plongement lexical (Embedding) pour les caractères de sortie
-        self.embedding = nn.Embedding(dict_size, hidden_dim)
-
-        # Couches pour attention
-        # Couche pour transformer l'état caché du décodeur en "query"
+        # Définition de la couche dense pour l'attention
+        self.att_combine = nn.Linear(2*hidden_dim, hidden_dim)
         self.hidden2query = nn.Linear(hidden_dim, hidden_dim)
 
-        # Couche dense pour la sortie
-        # Couche linéaire finale pour transformer l'état caché du décodeur
-        # en un score (logit) pour chaque mot du vocabulaire
+        # Définition de la couche dense pour la sortie
         self.fc_out = nn.Linear(hidden_dim, dict_size)
+        self.to(device)
+
+    def encoder(self, x):
+        #Encodeur
+        
+        # Couche GRU
+        #    out: (batch_size, seq_len, n_hidden)
+        #    hidden: (n_layers, batch_size, n_hidden)
+        out, hidden = self.encoder_rnn(x)
+
+        return out, hidden
+    
+    def attentionModule(self, query, values):
+        # Module d'attention
+
+        # Couche dense à l'entrée du module d'attention
+        query = self.hidden2query(query)
+
+        # 1. Calcul des scores d'attention
+        # (batch, 1, n_hidden) @ (batch, n_hidden, seq_len) -> (batch, 1, seq_len)
+        scores = torch.bmm(query, values.transpose(1, 2))
+        
+        # 2. Normalisation des scores avec Softmax
+        # Appliqué sur la dimension de la séquence d'entrée (dim=2)
+        attention_weights = F.softmax(scores, dim=2)
+        
+        # 3. Calcul du vecteur de contexte
+        # (batch, 1, seq_len) @ (batch, seq_len, n_hidden) -> (batch, 1, n_hidden)
+        attention_output = torch.bmm(attention_weights, values)
+
+        return attention_output, attention_weights
+    
+    def decoder(self, encoder_outs, hidden):
+        # Décodeur avec attention
+
+        # Initialisation des variables
+        max_len_out = self.max_len
+        max_len_in = encoder_outs.size(1) # Longueur de la séquence d'entrée
+        batch_size = hidden.shape[1] # Taille de la batch
+
+        # Jeton d'entrée initial (<sos> = 0)
+        vec_in = torch.zeros((batch_size, 1), dtype=torch.long, device=self.device)
+        
+        # Tenseurs pour stocker les résultats
+        vec_out = torch.zeros((batch_size, max_len_out, self.dict_size)).to(self.device)
+        attention_weights = torch.zeros((batch_size, max_len_out, max_len_in)).to(self.device)
+
+        # Boucle pour tous les symboles de sortie
+        for i in range(max_len_out):          
+            # 1. Plongement lexical de l'entrée
+            # 'embedded' a la forme (batch_size, 1, n_hidden)
+            embedded = self.embedding(vec_in)
+
+            # 2. Calcul de l'attention
+            # L'état caché 'hidden' (de la couche supérieure) est la "query"
+            # 'query' a la forme (batch_size, 1, n_hidden)
+            query = hidden[-1].unsqueeze(1) # Prend la dernière couche et ajoute une dimension
+            
+            # 'context' (batch, 1, n_hidden), 'attn_w' (batch, 1, seq_len)
+            context, attn_w = self.attentionModule(query, encoder_outs)
+            
+            # Stocker les poids d'attention (pour visualisation)
+            # squeeze() enlève les dimensions superflues
+            attention_weights[:, i, :] = attn_w.squeeze(1)
+
+            # 3. Combiner le mot d'entrée (embedded) et le contexte
+            # (batch, 1, n_hidden) + (batch, 1, n_hidden) -> (batch, 1, 2*n_hidden)
+            rnn_input = torch.cat((embedded, context), dim=2)
+            
+            # 4. Passe avant dans la couche GRU du décodeur
+            # rnn_out: (batch, 1, n_hidden)
+            # hidden: (n_layers, batch, n_hidden)
+            rnn_out, hidden = self.decoder_rnn(rnn_input, hidden)
+            
+            # 5. Couche linéaire de sortie (Logits)
+            # output: (batch, 1, dict_size['en'])
+            output = self.fc_out(rnn_out.squeeze(1))
+            
+            # 6. Stocker les logits
+            vec_out[:, i, :] = output
+            
+            # 7. Le mot prédit devient l'entrée pour la prochaine itération
+            # output.argmax(1) -> (B)
+            # .unsqueeze(1) -> (B, 1)
+            vec_in = output.argmax(1).unsqueeze(1)
+
+        return vec_out, hidden, attention_weights
 
     def forward(self, x):
         # x: (batch_size, seq_len_in, input_dim) - par ex. (B, 150, 2)
-        
-        # 1. Encodeur
-        # encoder_outputs: (B, seq_len_in, hidden_dim)
-        # hidden: (n_layers, B, hidden_dim)
-        encoder_outputs, hidden = self.encoder_rnn(x)
-        
-        # Initialisations pour la boucle du décodeur
-        batch_size = x.size(0)
-        
-        # Premier jeton d'entrée pour le décodeur : <sos>
-        # Forme : (B, 1)
-        decoder_input = torch.full((batch_size, 1), 
-                                   0, # Start_Symbol to int
-                                   dtype=torch.long, 
-                                   device=self.device)
-        
-        # L'état caché initial du décodeur est l'état caché final de l'encodeur
-        decoder_hidden = hidden
-        
-        # Liste pour stocker les sorties (logits) à chaque pas de temps
-        outputs = []
-
-        # 2. Boucle du décodeur (génération)
-        # Nous générons un mot à la fois, jusqu'à la longueur maximale
-        for t in range(self.maxlen):
-            
-            # 2a. Plongement lexical du mot d'entrée
-            # embedded: (B, 1, hidden_dim)
-            embedded = self.embedding(decoder_input)
-            
-            # 2b. Calcul de l'attention
-            # 'query' est basé sur la couche supérieure de l'état caché du décodeur
-            # query: (B, 1, hidden_dim)
-            query = self.hidden2query(decoder_hidden[-1].unsqueeze(1))
-            
-            # Calcul des scores (dot product attention)
-            # (B, 1, L_in)
-            scores = torch.bmm(query, encoder_outputs.transpose(1, 2))
-            
-            # Poids d'attention (B, 1, L_in)
-            attn_weights = F.softmax(scores, dim=2)
-            
-            # Vecteur de contexte (B, 1, hidden_dim)
-            context = torch.bmm(attn_weights, encoder_outputs)
-            
-            # 2c. Préparation de l'entrée du décodeur RNN
-            # Concaténation de l'embedding du mot et du contexte
-            # rnn_input: (B, 1, hidden_dim * 2)
-            rnn_input = torch.cat((embedded, context), dim=2)
-            
-            # 2d. Passe avant dans le GRU du décodeur
-            # rnn_output: (B, 1, hidden_dim)
-            rnn_output, decoder_hidden = self.decoder_rnn(rnn_input, decoder_hidden)
-            
-            # 2e. Calcul des logits de sortie
-            # output: (B, dict_size)
-            output = self.fc_out(rnn_output.squeeze(1))
-            
-            # Stocker la sortie
-            outputs.append(output)
-            
-            # 2f. Préparation de la prochaine entrée
-            # Le mot prédit (argmax) devient l'entrée de l'étape suivante
-            # vec_in: (B, 1)
-            decoder_input = output.argmax(dim=1).unsqueeze(1)
-
-        # 3. Empiler les sorties
-        # Convertit la liste de tenseurs (B, dict_size) en un seul tenseur
-        # (B, maxlen, dict_size)
-        outputs = torch.stack(outputs, dim=1)
-        
-        return outputs
+        out, h = self.encoder(x)
+        out, hidden, attn = self.decoder(out,h)
+        return out, hidden, attn

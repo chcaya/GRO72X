@@ -14,7 +14,7 @@ if __name__ == '__main__':
 
     # ---------------- Paramètres et hyperparamètres ----------------#
     force_cpu = True           # Forcer a utiliser le cpu?
-    training = True            # Entrainement?
+    training = False            # Entrainement?
     test = True                # Test?
     learning_curves = True     # Affichage des courbes d'entrainement?
     gen_test_images = True     # Génération images test?
@@ -25,7 +25,7 @@ if __name__ == '__main__':
     n_epochs = 50              # 50 époques est un bon point de départ
     batch_size = 16            # Taille de lot standard
     lr = 0.001                 # Taux d'apprentissage
-    hidden_dim = 128           # Dimension de l'état caché
+    hidden_dim = 16           # Dimension de l'état caché
     n_layers = 2               # Nombre de couches pour le GRU
     train_val_split = 0.8      # 80% pour l'entraînement, 20% pour la validation
 
@@ -94,7 +94,7 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
 
                 # 2. Passe avant
-                output_logits = model(in_seq) # Forme: (B, L, C)
+                output_logits, hidden, attn = model(in_seq) # Forme: (B, L, C)
                 
                 # 3. Calcul du coût
                 # CrossEntropyLoss s'attend à (B, C, L) pour les logits et (B, L) pour la cible
@@ -117,7 +117,7 @@ if __name__ == '__main__':
                     target_seq = target_seq.to(device)
 
                     # 1. Passe avant
-                    output_logits = model(in_seq) # (B, L, C)
+                    output_logits, hidden, attn = model(in_seq) # (B, L, C)
                     
                     # 2. Calcul du coût
                     loss = criterion(output_logits.permute(0, 2, 1), target_seq)
@@ -135,7 +135,7 @@ if __name__ == '__main__':
             # Enregistrer les poids
             if epoch_val_loss < best_val_loss:
                 best_val_loss = epoch_val_loss
-                torch.save(model.state_dict(), 'best_model_weights.pt')
+                torch.save(model._orig_mod.state_dict(), 'best_model_weights.pt')
                 print('   -> Nouveau meilleur modèle sauvegardé!')
 
 
@@ -169,7 +169,7 @@ if __name__ == '__main__':
                 in_seq = in_seq.to(device)
                 
                 # 1. Prédire la séquence de logits
-                output_logits = model(in_seq) # (B, L, C)
+                output_logits, hidden, attn = model(in_seq) # (B, L, C)
                 
                 # 2. Obtenir les indices des caractères prédits (le plus probable)
                 predictions = output_logits.argmax(dim=2) # (B, L)
