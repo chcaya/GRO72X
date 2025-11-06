@@ -13,7 +13,7 @@ from torchvision import transforms
 from dataset import ConveyorSimulator
 from metrics import AccuracyMetric, MeanAveragePrecisionMetric, SegmentationIntersectionOverUnionMetric
 from models.classification_network import ClassificationNetwork
-from models.detection_network import DetectionNetwork, SimpleDetLoss
+from models.detection_network import DetectionNetwork, DetectionLoss
 from models.segmentation_network import SegmentationNetwork
 from visualizer import Visualizer
 
@@ -62,58 +62,7 @@ class ConveyorCnnTrainer():
         if task == 'classification':
             return nn.BCEWithLogitsLoss()
         elif task == 'detection':
-            # def detection_loss(prediction, target):
-            #     """
-            #     A standard object detection loss function that combines confidence, bounding
-            #     box, and classification losses.
-
-            #     :param prediction: The (N, 3, 7) output from the model.
-            #                        Format: [conf, x, y, size, score_c0, score_c1, score_c2]
-            #     :param target: The (N, 3, 5) ground truth tensor.
-            #                    Format: [objectness, x, y, size, class_index]
-            #     """
-            #     # --- Hyperparameters for balancing the loss components ---
-            #     lambda_coord = 5.0
-            #     lambda_noobj = 0.5
-                
-            #     # --- Create a mask to find which prediction slots contain an object ---
-            #     obj_mask = target[..., 0] == 1
-            #     noobj_mask = target[..., 0] == 0
-
-            #     # --- 1. Confidence (Objectness) Loss ---
-            #     loss_conf_obj = F.binary_cross_entropy_with_logits(
-            #         prediction[..., 0][obj_mask],
-            #         target[..., 0][obj_mask]
-            #     )
-            #     loss_conf_noobj = F.binary_cross_entropy_with_logits(
-            #         prediction[..., 0][noobj_mask],
-            #         target[..., 0][noobj_mask]
-            #     )
-            #     loss_confidence = loss_conf_obj + (lambda_noobj * loss_conf_noobj)
-                
-            #     # --- 2. Bounding Box Loss (Localization) ---
-            #     loss_bbox = torch.tensor(0.0, device=prediction.device)
-            #     if obj_mask.sum() > 0:
-            #         bbox_pred = prediction[..., 1:4][obj_mask]
-            #         bbox_target = target[..., 1:4][obj_mask]
-            #         loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target, reduction='mean')
-                    
-            #     # --- 3. Classification Loss ---
-            #     loss_class = torch.tensor(0.0, device=prediction.device)
-            #     if obj_mask.sum() > 0:
-            #         class_pred_logits = prediction[..., 4:][obj_mask]
-            #         target_class_indices = target[..., 4][obj_mask].long()
-            #         loss_class = F.cross_entropy(class_pred_logits, target_class_indices, reduction='mean')
-
-            #     # --- Final Combined Loss ---
-            #     print(f"BBox Loss: {(lambda_coord * loss_bbox).item():.4f}, Conf Loss: {loss_confidence.item():.4f}, Class Loss: {loss_class.item():.4f}")
-            #     total_loss = loss_confidence + (lambda_coord * loss_bbox) + loss_class
-                
-            #     return total_loss
-
-            # return detection_loss
-
-            return SimpleDetLoss()
+            return DetectionLoss()
         elif task == 'segmentation':
             return nn.CrossEntropyLoss()
         else:
@@ -160,6 +109,7 @@ class ConveyorCnnTrainer():
             test_loss, test_metric.get_name(), test_metric.get_value()))
 
         prediction = self._model(image)
+        pred_metric = self.compute_pred_metric(self._args.task, prediction)
 
         # Get the number of images in the current batch
         batch_size = image.shape[0]
@@ -169,7 +119,7 @@ class ConveyorCnnTrainer():
         # Show the prediction for the randomly selected image
         visualizer.show_prediction(
             image[random_idx], 
-            prediction[random_idx], 
+            pred_metric[random_idx], 
             segmentation_target[random_idx], 
             boxes[random_idx], 
             class_labels[random_idx]
@@ -263,6 +213,7 @@ class ConveyorCnnTrainer():
                 validation_loss, validation_metric.get_name(), validation_metric_value))
 
             prediction = self._model(image)
+            pred_metric = self.compute_pred_metric(self._args.task, prediction)
 
             # Get the number of images in the current batch
             batch_size = image.shape[0]
@@ -272,7 +223,7 @@ class ConveyorCnnTrainer():
             # Show the prediction for the randomly selected image
             visualizer.show_prediction(
                 image[random_idx], 
-                prediction[random_idx], 
+                pred_metric[random_idx], 
                 masks[random_idx], 
                 boxes[random_idx], 
                 labels[random_idx]
@@ -285,6 +236,30 @@ class ConveyorCnnTrainer():
         ans = input('Do you want ot test? (y/n):')
         if ans == 'y':
             self.test()
+
+    def compute_pred_metric(self, task, prediction):
+        with torch.no_grad():
+            if task == 'classification':
+                pred_metric = torch.sigmoid(prediction)
+
+            elif task == 'detection':
+                def det_logits_2_pred_metric(logits):
+                    # pred: (N, A, 1+3+C) logits
+                    # Helper for the detection code
+                    obj = torch.sigmoid(logits[..., 0:1])
+                    box = torch.sigmoid(logits[..., 1:4])
+                    cls = torch.softmax(logits[..., 4:], dim=-1)   # (N,A,C) -> probs
+                    return torch.cat([obj, box, cls], dim=-1)    # (N,A,1+3+C)
+                
+                pred_metric = det_logits_2_pred_metric(prediction) 
+
+            elif task == 'segmentation':
+                pred_metric = prediction
+
+            else:
+                raise ValueError(f"Task '{task}' is not supported.")
+
+            return pred_metric
 
     def _train_batch(self, task, model, criterion, metric, optimizer, image, segmentation_target, boxes, class_labels):
         """
@@ -335,23 +310,18 @@ class ConveyorCnnTrainer():
         if task == 'classification':
             target = class_labels.float()
             loss = criterion(prediction, target)
-            metric.accumulate(torch.sigmoid(prediction), target)
-
         elif task == 'detection':
             target = boxes
             loss = criterion(prediction, target)
-            # The metric expects confidence scores as probabilities, so we apply sigmoid
-            pred_for_metric = prediction.detach().clone()
-            pred_for_metric[:, :, 0] = torch.sigmoid(pred_for_metric[:, :, 0])
-            metric.accumulate(pred_for_metric, target)
-
         elif task == 'segmentation':
             target = segmentation_target.long()
             loss = criterion(prediction, target)
-            metric.accumulate(prediction, target)
-
         else:
             raise ValueError(f"Task '{task}' is not supported.")
+
+        pred_metric = self.compute_pred_metric(task, prediction)
+        with torch.no_grad():
+            metric.accumulate(pred_metric, target)
         
         # Backward pass: compute gradient of the loss with respect to model parameters
         loss.backward()
@@ -406,22 +376,18 @@ class ConveyorCnnTrainer():
         if task == 'classification':
             target = class_labels.float()
             loss = criterion(prediction, target)
-            metric.accumulate(torch.sigmoid(prediction), target)
-
         elif task == 'detection':
             target = boxes
             loss = criterion(prediction, target)
-            pred_for_metric = prediction.detach().clone()
-            pred_for_metric[:, :, 0] = torch.sigmoid(pred_for_metric[:, :, 0])
-            metric.accumulate(pred_for_metric, boxes)
-
         elif task == 'segmentation':
             target = segmentation_target.long()
             loss = criterion(prediction, target)
-            metric.accumulate(prediction, target)
             
         else:
             raise ValueError(f"Task '{task}' is not supported.")
+        
+        pred_metric = self.compute_pred_metric(task, prediction)
+        metric.accumulate(pred_metric, target)
 
         return loss
 

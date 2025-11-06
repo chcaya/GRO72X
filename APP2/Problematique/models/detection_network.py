@@ -1,66 +1,98 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class DetectionNetwork(nn.Module):
-    def __init__(self, in_ch=1, num_anchors=3, num_classes=3):
+
+class ResidualBlock(nn.Module):
+    """
+    The core building block of a ResNet. It contains a "shortcut" or "skip connection"
+    that adds the input of the block to its output.
+    """
+    def __init__(self, in_channels, out_channels, stride=1):
         super().__init__()
-        self.num_anchors = num_anchors
-        self.num_classes = num_classes
-
-        self.feature_extractor = nn.Sequential(
-            nn.Conv2d(in_ch, 16, 3, padding=1),  # (N, 1, 53, 53) -> (N, 16, 53, 53)
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-            nn.Conv2d(16, 16, 3, padding=1),  # (N, 16, 53, 53) -> (N, 16, 53, 53)
-            nn.BatchNorm2d(16),
-            nn.LeakyReLU(),
-            nn.Dropout2d(0.1),
-            nn.MaxPool2d(3, 2),  # (N, 16, 53, 53) -> (N, 16, 26, 26)
-
-
-            nn.Conv2d(16, 32, 3, padding=1),  # (N, 16, 26, 26) -> (N, 32, 26, 26)
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.Conv2d(32, 32, 3, padding=1),  # (N, 32, 26, 26) -> (N, 32, 26, 26)
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.Dropout2d(0.1),
-            nn.MaxPool2d(2),  # (N, 32, 26, 26) -> (N, 32, 13, 13)
-
-
-            nn.Conv2d(32, 64, 3, padding=1),  # (N, 32, 13, 13) -> (N, 64, 13, 13)
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(),
-            nn.Conv2d(64, 64, 3, padding=1),  # (N, 32, 13, 13) -> (N, 64, 13, 13)
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(),
-            nn.AdaptiveMaxPool2d((7, 7))   # (N,64,13,13) -> (N,64,7,7)
+        
+        # Main path
+        self.main_path = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels)
         )
-
-        self.linear = nn.Sequential(
-            nn.Flatten(1),              # (N,64,7,7) -> (N,3136)
-            nn.Linear(64 * 7 * 7, 96),  # (N,3136) -> (N,96)
-            nn.ReLU(),
-            nn.Dropout(0.1),
+        
+        # Shortcut path to handle changes in dimensions or channels
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+            
+        self.final_relu = nn.Sequential(
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout2d(0.2)
         )
-
-        self.obj_head = nn.Linear(96, num_anchors * 1)               # (N,96) -> (N,3)
-        self.box_head = nn.Linear(96, num_anchors * 3)               # (N,96) -> (N,9)
-        self.cls_head = nn.Linear(96, num_anchors * num_classes)     # (N,96) -> (N,9)
 
     def forward(self, x):
-        N = x.size(0)
-        x = self.feature_extractor(x)     # (N,64,7,7)
-        h = self.linear(x)                # (N,96)
+        # The residual connection: add the original input (shortcut) to the processed output
+        out = self.main_path(x) + self.shortcut(x)
+        out = self.final_relu(out)
+        return out
 
-        obj = self.obj_head(h).view(N, self.num_anchors, 1)
-        box = self.box_head(h).view(N, self.num_anchors, 3)
-        cls = self.cls_head(h).view(N, self.num_anchors, self.num_classes)
+class DetectionNetwork(nn.Module):
+    """
+    A ResNet-style network for detection, with a total of ~321k parameters.
+    """
+    def __init__(self):
+        super().__init__()
+        
+        # Initial "stem" layer
+        self.stem = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout2d(0.2),
+            nn.MaxPool2d(2, 2) # Image size -> 26x26
+        )
+        
+        # Stack of residual blocks
+        self.layer1 = ResidualBlock(16, 16, stride=1)
+        self.layer2 = ResidualBlock(16, 32, stride=2) # Downsample -> 13x13
+        self.layer3 = ResidualBlock(32, 64, stride=2) # Downsample -> 7x7
+        
+        # The same head as before, but with a smaller intermediate layer
+        # to keep the parameter count low.
+        self.head = nn.Sequential(
+            nn.Flatten(),
+
+            nn.Dropout(p=0.3),
+            nn.Linear(64 * 7 * 7, 64), 
+            nn.ReLU(),
+
+            nn.Dropout(p=0.3),
+            # nn.Linear(64, 3 * 7)
+        )
+
+        self.obj_head = nn.Linear(64, 3 * 1)               # (N,64) -> (N,3)
+        self.box_head = nn.Linear(64, 3 * 3)               # (N,64) -> (N,9)
+        self.cls_head = nn.Linear(64, 3 * 3)               # (N,64) -> (N,9)
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.head(x)
+        # return x.view(-1, 3, 7)
+
+        obj = self.obj_head(x).view(-1, 3, 1)
+        box = self.box_head(x).view(-1, 3, 3)
+        cls = self.cls_head(x).view(-1, 3, 3)
 
         return torch.cat([obj, box, cls], dim=-1)  # (N, num_anchors, 1+3+num_classes)
 
 
-class SimpleDetLoss(nn.Module):
+class DetectionLoss(nn.Module):
     """
     Perte composite simple pour nos cibles (N, A, 5):
       [:, :, 0] presence {0/1}
@@ -68,177 +100,59 @@ class SimpleDetLoss(nn.Module):
       [:, :, 4]   class_idx   in {0..C-1}
     """
 
-    def __init__(self, w_obj=2.0, w_box=40.0, w_cls=1.0):
+    def __init__(self, lambda_obj=1.0, lambda_noobj=0.5, lambda_bbox=40.0, lambda_class=2.0):
         super().__init__()
-        self.bce = nn.BCEWithLogitsLoss()
-        self.l1 = nn.SmoothL1Loss()
-        self.ce = nn.CrossEntropyLoss()
-        self.w_obj, self.w_box, self.w_cls = w_obj, w_box, w_cls
+        # --- Hyperparameters for balancing the loss components ---
+        self.lambda_obj = lambda_obj
+        self.lambda_noobj = lambda_noobj
+        self.lambda_bbox = lambda_bbox
+        self.lambda_class = lambda_class
 
-    def forward(self, pred, target):
-        # Perdictions
-        obj_logit = pred[..., 0]
-        box_raw = pred[..., 1:4]
-        cls_logit = pred[..., 4:]
+    def forward(self, prediction, target):
+        """
+        A standard object detection loss function that combines confidence, bounding
+        box, and classification losses.
 
-        # Targets
-        presence = target[..., 0]
-        box_tgt = target[..., 1:4]
-        cls_idx = target[..., 4].long()
+        :param prediction: The (N, 3, 7) output from the model.
+                            Format: [conf, x, y, size, score_c0, score_c1, score_c2]
+        :param target: The (N, 3, 5) ground truth tensor.
+                        Format: [objectness, x, y, size, class_index]
+        """        
+        # --- Create a mask to find which prediction slots contain an object ---
+        obj_mask = target[..., 0] == 1
+        noobj_mask = target[..., 0] == 0
 
-        # 1) Objectness
-        loss_obj = self.bce(obj_logit, presence)
-
-        # Only for examples with objects
-        pos = presence > 0.5
-        if pos.any():
-            # 2) Box (x,y,size)
-            box_pred = torch.sigmoid(box_raw)
-            loss_box = self.l1(box_pred[pos], box_tgt[pos])
-
-            # 3) Class
-            loss_cls = self.ce(cls_logit[pos], cls_idx[pos])
-        else:
-            loss_box = box_raw.sum() * 0.0
-            loss_cls = cls_logit.sum() * 0.0
-
-        print(
-            f"loss_obj: {self.w_obj*loss_obj.item():.4f}, loss_box: {self.w_box*loss_box.item():.4f}, loss_cls: {self.w_cls*loss_cls.item():.4f}")
-
-        return self.w_obj*loss_obj + self.w_box*loss_box + self.w_cls*loss_cls
-
-# class ResidualBlock(nn.Module):
-#     """
-#     The core building block of a ResNet. It contains a "shortcut" or "skip connection"
-#     that adds the input of the block to its output.
-#     """
-#     def __init__(self, in_channels, out_channels, stride=1):
-#         super().__init__()
+        # --- 1. Confidence (Objectness) Loss ---
+        loss_conf_obj = F.binary_cross_entropy_with_logits(
+            prediction[..., 0][obj_mask],
+            target[..., 0][obj_mask]
+        )
+        loss_conf_noobj = F.binary_cross_entropy_with_logits(
+            prediction[..., 0][noobj_mask],
+            target[..., 0][noobj_mask]
+        )
+        loss_confidence = (self.lambda_obj * loss_conf_obj) + (self.lambda_noobj * loss_conf_noobj)
         
-#         # Main path
-#         self.main_path = nn.Sequential(
-#             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-#             nn.BatchNorm2d(out_channels),
-#             nn.LeakyReLU(inplace=True),
-#             nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False),
-#             nn.BatchNorm2d(out_channels)
-#         )
-        
-#         # Shortcut path to handle changes in dimensions or channels
-#         self.shortcut = nn.Sequential()
-#         if stride != 1 or in_channels != out_channels:
-#             self.shortcut = nn.Sequential(
-#                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-#                 nn.BatchNorm2d(out_channels)
-#             )
+        # --- 2. Bounding Box Loss (Localization) ---
+        loss_bbox = torch.tensor(0.0, device=prediction.device)
+        if obj_mask.sum() > 0:
+            bbox_pred_logits = prediction[..., 1:4][obj_mask]
+            bbox_pred = torch.sigmoid(bbox_pred_logits)
+            bbox_target = target[..., 1:4][obj_mask]
+            loss_bbox = F.smooth_l1_loss(bbox_pred, bbox_target, reduction='mean')
             
-#         self.final_relu = nn.LeakyReLU(inplace=True)
+        # --- 3. Classification Loss ---
+        loss_class = torch.tensor(0.0, device=prediction.device)
+        if obj_mask.sum() > 0:
+            class_pred_logits = prediction[..., 4:][obj_mask]
+            target_class_indices = target[..., 4][obj_mask].long()
+            loss_class = F.cross_entropy(class_pred_logits, target_class_indices, reduction='mean')
 
-#         self.dropout = nn.Dropout2d(0.1)
-
-#     def forward(self, x):
-#         # The residual connection: add the original input (shortcut) to the processed output
-#         out = self.main_path(x) + self.shortcut(x)
-#         out = self.final_relu(out)
-#         out = self.dropout(out)
-#         return out
-
-# class DetectionNetwork(nn.Module):
-#     """
-#     A ResNet-style network for detection, with a total of ~321k parameters.
-#     """
-#     def __init__(self):
-#         super().__init__()
+        # --- Final Combined Loss ---
+        print(f"Conf obj Loss: {(self.lambda_obj*loss_conf_obj).item():.4f}, \
+                Conf no obj Loss: {(self.lambda_noobj * loss_conf_noobj).item():.4f}, \
+                BBox Loss: {(self.lambda_bbox * loss_bbox).item():.4f}, \
+                Class Loss: {(self.lambda_class * loss_class).item():.4f}")
+        total_loss = loss_confidence + (self.lambda_bbox * loss_bbox) + (self.lambda_class * loss_class)
         
-#         # Initial "stem" layer
-#         self.stem = nn.Sequential(
-#             nn.Conv2d(1, 16, kernel_size=3, padding=1, bias=False),
-#             nn.BatchNorm2d(16),
-#             nn.LeakyReLU(inplace=True),
-#             nn.Dropout2d(0.1),
-#             nn.MaxPool2d(2, 2) # Image size -> 26x26
-#         )
-        
-#         # Stack of residual blocks
-#         self.layer1 = ResidualBlock(16, 16, stride=1)
-#         self.layer2 = ResidualBlock(16, 32, stride=2) # Downsample -> 13x13
-#         self.layer3 = ResidualBlock(32, 64, stride=2) # Downsample -> 7x7
-        
-#         # The same head as before, but with a smaller intermediate layer
-#         # to keep the parameter count low.
-#         self.head = nn.Sequential(
-#             nn.Flatten(),
-
-#             nn.Dropout(p=0.2),
-#             nn.Linear(64 * 7 * 7, 64), 
-#             nn.ReLU(),
-
-#             # nn.Dropout(p=0.2),
-#             # nn.Linear(64, 3 * 7)
-#         )
-
-#         self.obj_head = nn.Linear(64, 3 * 1)               # (N,64) -> (N,3)
-#         self.box_head = nn.Linear(64, 3 * 3)               # (N,64) -> (N,9)
-#         self.cls_head = nn.Linear(64, 3 * 3)               # (N,64) -> (N,9)
-
-#     def forward(self, x):
-#         x = self.stem(x)
-#         x = self.layer1(x)
-#         x = self.layer2(x)
-#         x = self.layer3(x)
-#         x = self.head(x)
-#         # return x.view(-1, 3, 7)
-
-#         obj = self.obj_head(x).view(-1, 3, 1)
-#         box = self.box_head(x).view(-1, 3, 3)
-#         cls = self.cls_head(x).view(-1, 3, 3)
-
-#         return torch.cat([obj, box, cls], dim=-1)  # (N, num_anchors, 1+3+num_classes)
-
-
-# class SimpleDetLoss(nn.Module):
-#     """
-#     Perte composite simple pour nos cibles (N, A, 5):
-#       [:, :, 0] presence {0/1}
-#       [:, :, 1:4] x, y, size  in [0,1]
-#       [:, :, 4]   class_idx   in {0..C-1}
-#     """
-
-#     def __init__(self, w_obj=2.0, w_box=40.0, w_cls=1.0):
-#         super().__init__()
-#         self.bce = nn.BCEWithLogitsLoss()
-#         self.l1 = nn.SmoothL1Loss()
-#         self.ce = nn.CrossEntropyLoss()
-#         self.w_obj, self.w_box, self.w_cls = w_obj, w_box, w_cls
-
-#     def forward(self, pred, target):
-#         # Perdictions
-#         obj_logit = pred[..., 0]
-#         box_raw = pred[..., 1:4]
-#         cls_logit = pred[..., 4:]
-
-#         # Targets
-#         presence = target[..., 0]
-#         box_tgt = target[..., 1:4]
-#         cls_idx = target[..., 4].long()
-
-#         # 1) Objectness
-#         loss_obj = self.bce(obj_logit, presence)
-
-#         # Only for examples with objects
-#         pos_mask = presence > 0.5
-#         if pos_mask.any():
-#             # 2) Box (x,y,size)
-#             box_pred = torch.sigmoid(box_raw)
-#             loss_box = self.l1(box_pred[pos_mask], box_tgt[pos_mask])
-
-#             # 3) Class
-#             loss_cls = self.ce(cls_logit[pos_mask], cls_idx[pos_mask])
-#         else:
-#             loss_box = box_raw.sum() * 0.0
-#             loss_cls = cls_logit.sum() * 0.0
-
-#         print(
-#             f"loss_obj: {self.w_obj*loss_obj.item():.4f}, loss_box: {self.w_box*loss_box.item():.4f}, loss_cls: {self.w_cls*loss_cls.item():.4f}")
-
-#         return self.w_obj*loss_obj + self.w_box*loss_box + self.w_cls*loss_cls
+        return total_loss
